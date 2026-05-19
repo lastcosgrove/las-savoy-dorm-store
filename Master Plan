@@ -1,0 +1,373 @@
+# Dorm Store App — Master Development Plan
+
+> A self-contained point-of-sale and inventory system for a boarding school dorm store.  
+> Built with Next.js + Google OAuth + Google Sheets. No external student-data databases.
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Goals & Constraints](#2-goals--constraints)
+3. [Tech Stack](#3-tech-stack)
+4. [System Architecture](#4-system-architecture)
+5. [Google Sheets Structure](#5-google-sheets-structure)
+6. [App Pages & Roles](#6-app-pages--roles)
+7. [Feature Specifications](#7-feature-specifications)
+8. [Inventory System](#8-inventory-system)
+9. [Development Phases](#9-development-phases)
+10. [Future Features](#10-future-features)
+11. [Pre-Dev Checklist](#11-pre-dev-checklist)
+
+---
+
+## 1. Project Overview
+
+A web-based point-of-sale app for a boarding school dorm store. Students log in with their school Gmail, browse available items, add them to a cart, and submit their purchase. Transactions are written directly to a Google Sheets workbook for analytics, P&L tracking, and daily reporting — with no third-party database involved.
+
+Shopkeepers have an admin panel to manage items, prices, stock levels, and view reports.
+
+---
+
+## 2. Goals & Constraints
+
+### Must-Have Features
+- Google login (restricted to school domain)
+- Student name and student number entry at checkout
+- Item catalog with prices
+- Cart and checkout flow
+- Admin: add, edit, and remove items
+- Admin: toggle items in/out of stock
+- Out-of-stock items automatically greyed out
+- Inventory tracking (stock received vs. sold)
+- Export/log transactions to Google Sheets (per line item)
+- Daily summary analytics (revenue, cost, profit per item)
+
+### Constraints
+- **No external databases** — all data lives in Google Sheets
+- **No third-party student data storage** — only Google (which the school already uses)
+- Hosted on **Vercel** (free tier to start)
+- Must work well on **mobile** (students are on phones)
+
+---
+
+## 3. Tech Stack
+
+| Layer | Technology | Reason |
+|---|---|---|
+| Frontend + Backend | Next.js (App Router) | API routes + UI in one repo, Vercel-native |
+| Authentication | NextAuth.js + Google OAuth | Free, supports domain restriction |
+| Data storage | Google Sheets via `googleapis` | No external DB, staff already familiar |
+| Hosting | Vercel | Free tier, git-push deploys |
+| Styling | Tailwind CSS | Fast, responsive, mobile-friendly |
+| Language | TypeScript | Type safety for Sheets data models |
+
+---
+
+## 4. System Architecture
+
+```
+Students / Shopkeeper
+        │
+        ▼
+  Google OAuth  ──────────────────────────────────────┐
+  (domain filter)                                      │
+        │                                              │
+        ▼                                              │
+  Next.js App (Vercel)                                 │
+  ┌─────────────────────────────────┐                  │
+  │  Store UI  (item grid + cart)   │                  │
+  │  Checkout  (student ID + items) │                  │
+  │  Admin     (items, stock)       │                  │
+  │  API routes (Sheets read/write) │                  │
+  └──────────────┬──────────────────┘                  │
+                 │                                     │
+                 ▼                                     │
+        Google Sheets API                              │
+        (service account)                              │
+                 │                                     │
+                 ▼                                     │
+        Google Sheets Workbook  ◄──────────────────────┘
+        ┌─────────────┬──────────────┬─────────────┬──────────┐
+        │   items     │ transactions │ stock_log   │  daily   │
+        │             │              │             │ summary  │
+        └─────────────┴──────────────┴─────────────┴──────────┘
+```
+
+**Key principle:** The Next.js app is stateless — it reads from and writes to Sheets on every relevant action. React state handles the cart client-side only; nothing is persisted until checkout is submitted.
+
+---
+
+## 5. Google Sheets Structure
+
+One shared workbook with four tabs.
+
+### Tab 1: `items`
+
+The source of truth for the item catalog.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | string | Unique item ID (e.g. `item_001`) |
+| `name` | string | Display name |
+| `category` | string | e.g. Snacks, Drinks, Hygiene |
+| `price` | number | Sale price to student |
+| `cost` | number | Cost to store (for P&L) |
+| `stock_count` | number | Current on-hand quantity |
+| `stock_received` | number | Running total units received (all time) |
+| `stock_low_threshold` | number | Show "low stock" warning below this count |
+| `in_stock` | boolean | Manual override (can force-disable regardless of count) |
+| `active` | boolean | Soft delete — FALSE hides from catalog |
+
+**Derived logic:** An item is purchasable only when `active = TRUE`, `in_stock = TRUE`, and `stock_count > 0`. If any condition fails, it is greyed out.
+
+---
+
+### Tab 2: `transactions`
+
+One row per line item purchased. Each checkout creates multiple rows sharing a `transaction_id`.
+
+| Column | Description |
+|---|---|
+| `timestamp` | Full ISO datetime |
+| `date` | Date only (for daily grouping) |
+| `student_name` | Entered at checkout |
+| `student_id` | Student number entered at checkout |
+| `transaction_id` | Shared ID across all items in one checkout |
+| `item_id` | Reference to `items.id` |
+| `item_name` | Denormalised for readability |
+| `qty` | Quantity purchased |
+| `unit_price` | Price at time of purchase (snapshot) |
+| `unit_cost` | Cost at time of purchase (snapshot) |
+| `subtotal` | `qty × unit_price` |
+
+---
+
+### Tab 3: `stock_log`
+
+Full audit trail of every stock movement — receipts and sales.
+
+| Column | Description |
+|---|---|
+| `timestamp` | Full ISO datetime |
+| `item_id` | Reference to `items.id` |
+| `item_name` | Denormalised |
+| `type` | `received` or `sale` |
+| `qty_change` | Positive (received) or negative (sale) |
+| `new_total` | `stock_count` after this movement |
+| `notes` | e.g. transaction ID for sales, delivery note for receipts |
+
+**Shrinkage detection:** If `Σ stock_received − Σ sales ≠ current stock_count`, stock is unaccounted for.
+
+---
+
+### Tab 4: `daily_summary`
+
+Appended each day (via cron or manual trigger).
+
+| Column | Description |
+|---|---|
+| `date` | Date of summary |
+| `total_revenue` | Sum of all subtotals |
+| `total_cost` | Sum of all unit_cost × qty |
+| `gross_profit` | `revenue − cost` |
+| `transactions_count` | Number of checkouts |
+| `top_item` | Best-selling item by revenue |
+| `items_sold` | Total units sold |
+
+Staff can build Sheets pivot tables and charts directly from this tab for P&L analysis.
+
+---
+
+## 6. App Pages & Roles
+
+### Route Map
+
+```
+/                     → redirect to /store (if logged in) or /login
+/login                → Google sign-in button
+/store                → item grid + cart (all authenticated users)
+/checkout             → cart review, student info, submit
+/admin                → admin home (shopkeeper role only)
+/admin/items          → add / edit / remove items, toggle stock
+/admin/stock          → receive stock deliveries, view stock log
+/admin/reports        → transaction log, daily summary view
+```
+
+### Roles
+
+| Role | Access | How assigned |
+|---|---|---|
+| Student | `/store`, `/checkout` | Any `@school.edu` Google login |
+| Shopkeeper (admin) | All routes | Gmail address in `ADMIN_EMAILS` env variable |
+
+Middleware (`middleware.ts`) redirects non-admins away from `/admin/*`. If the domain check fails on sign-in, the user is rejected entirely.
+
+---
+
+## 7. Feature Specifications
+
+### 7.1 Authentication
+
+- NextAuth.js with Google provider
+- `signIn` callback rejects emails not matching `@yourschool.edu`
+- Admin check: `session.user.email` is in `process.env.ADMIN_EMAILS`
+- Session stored in JWT (no database needed)
+
+### 7.2 Store View (`/store`)
+
+- Fetches `items` sheet on load (Next.js `revalidate: 60` — refreshes every 60s)
+- Items displayed in a responsive grid, grouped by category
+- **Three visual states per item:**
+  - ✅ Normal — in stock, tappable
+  - 🟡 Low stock badge (amber) — `stock_count <= stock_low_threshold`, still purchasable
+  - ⬜ Greyed out — `stock_count = 0` or `in_stock = FALSE`, not tappable
+- Tapping an item adds it to the cart (React state, client-side only)
+- Cart quantity for an item is capped at current `stock_count`
+- Cart icon/drawer shows running total and item count
+
+### 7.3 Checkout (`/checkout`)
+
+- Cart summary: item name, qty, unit price, subtotal per line
+- Grand total displayed prominently
+- Student fields: full name + student number (both required)
+- Submit triggers API route:
+  1. Re-reads `stock_count` for each item in cart (race condition check)
+  2. If any item is now out of stock → reject with friendly error, highlight affected items
+  3. If all clear → write all line items to `transactions` tab
+  4. Decrement `stock_count` for each item in `items` tab
+  5. Append entries to `stock_log` tab (type: `sale`)
+  6. Return success → redirect to confirmation screen
+- Confirmation screen shows transaction summary + student name
+
+### 7.4 Admin: Item Management (`/admin/items`)
+
+- Table of all active items with inline editing
+- Editable fields: name, category, price, cost, low threshold
+- Stock toggle (in_stock) — one click, visual toggle
+- "Add item" form — creates new row in `items` sheet
+- "Remove item" — sets `active = FALSE` (soft delete, preserves transaction history)
+- Changes write immediately to Sheets via API route
+
+### 7.5 Admin: Stock Management (`/admin/stock`)
+
+- Table of all items showing: name, current `stock_count`, `stock_received` total
+- Per-item "Receive stock" button → modal to enter quantity received
+  - On confirm: increments `stock_count` and `stock_received` in `items` tab
+  - Appends entry to `stock_log` (type: `received`, with optional notes field)
+- Stock log table: full audit trail, filterable by item or date
+
+### 7.6 Admin: Reports (`/admin/reports`)
+
+- Transaction log: all rows from `transactions` tab, filterable by date range
+- Daily summary table: from `daily_summary` tab
+- "Run daily summary" button → triggers API route to aggregate and append today's summary
+- Per-item breakdown: units sold, revenue, cost, profit margin
+
+---
+
+## 8. Inventory System
+
+### Stock Count Logic
+
+`stock_count` is the single source of truth for availability. It:
+- **Increases** when admin logs a stock receipt
+- **Decreases** when a transaction is successfully submitted
+- **Triggers grey-out** when it reaches 0
+
+`in_stock` is a separate manual override. Both must be TRUE (and `active = TRUE`) for an item to be purchasable.
+
+### Race Condition Handling
+
+Because the store page caches item data, two students could theoretically add the last unit to their carts simultaneously. The checkout API prevents double-selling by re-reading `stock_count` immediately before writing — the second submission will be rejected with a clear error message.
+
+### Shrinkage Tracking
+
+At any point: `stock_received (all time) − units_sold (all time) = stock_count + shrinkage`
+
+Admins can verify this in the `stock_log` tab. Discrepancies surface automatically in Sheets with a simple formula column.
+
+---
+
+## 9. Development Phases
+
+### Phase 1 — Foundation (Week 1)
+- [ ] Scaffold Next.js project with TypeScript + Tailwind
+- [ ] Push to GitHub, connect to Vercel
+- [ ] Set up Google Cloud project
+  - [ ] Enable Google Sheets API
+  - [ ] Enable Google OAuth 2.0
+  - [ ] Create service account, download credentials JSON
+- [ ] Configure NextAuth: Google provider + domain filter + admin check
+- [ ] Create Google Sheets workbook with all four tabs and correct headers
+- [ ] Share workbook with service account (editor access)
+- [ ] Build `lib/sheets.ts` — reusable read/write/append helpers
+- [ ] Set up environment variables (local + Vercel)
+
+### Phase 2 — Core Store (Week 2)
+- [ ] `/store` page: fetch items, category-grouped grid
+- [ ] Item card component with three stock states
+- [ ] Cart state (React context or Zustand)
+- [ ] Cart drawer/panel with running total
+- [ ] Stock cap logic in cart (can't exceed `stock_count`)
+- [ ] `/checkout` page: student info form + cart summary
+- [ ] Checkout API route: stock re-check → write transactions → decrement stock → write stock_log
+- [ ] Confirmation screen
+
+### Phase 3 — Admin Panel (Week 3)
+- [ ] Middleware: protect `/admin/*` routes by role
+- [ ] `/admin/items`: item table with inline edit, add, soft-delete, stock toggle
+- [ ] `/admin/stock`: receive stock form, stock log table
+- [ ] `/admin/reports`: transaction log table, date filter
+- [ ] Daily summary API route + manual trigger button
+
+### Phase 4 — Polish & Deploy (Week 4)
+- [ ] Mobile-responsive layout pass (all pages)
+- [ ] Loading states and error handling throughout
+- [ ] Sheets API quota handling (retry with backoff)
+- [ ] Vercel Cron job for automated daily summary (midnight)
+- [ ] End-to-end test with real school Google accounts
+- [ ] Environment variable and deployment documentation
+- [ ] Handoff guide for shopkeeper admins
+
+---
+
+## 10. Future Features
+
+| Feature | Approach |
+|---|---|
+| Email notifications on purchase | Add `nodemailer` or Resend to checkout API route; send to student + admin |
+| Multiple dorm tabs | Add `dorm` column to `items`; tab selector on `/store` |
+| Inventory alerts | Cron job checks `stock_count <= threshold`; emails admin |
+| Barcode scanning | Add `barcode` column to items; integrate `html5-qrcode` on store page |
+| Photo recognition | Camera input on add-item form; Vision API to suggest item details |
+| Coop connection | Separate Sheets workbook or additional tabs, same API pattern |
+| Offline support | Service worker + local queue; sync to Sheets when back online |
+
+---
+
+## 11. Pre-Dev Checklist
+
+Before writing a single line of code, confirm the following are in place:
+
+- [ ] **Google Cloud project** created (console.cloud.google.com)
+- [ ] **OAuth 2.0 credentials** created; authorised redirect URIs set for `localhost:3000` and Vercel domain
+- [ ] **Google Sheets API** enabled in the Cloud project
+- [ ] **Service account** created with a downloaded JSON key; added as editor to the Sheets workbook
+- [ ] **Google Sheets workbook** created with tabs: `items`, `transactions`, `stock_log`, `daily_summary`
+- [ ] **Vercel account** connected to GitHub repo
+- [ ] **School Gmail domain** confirmed (e.g. `@yourschool.edu`)
+- [ ] **Admin email list** ready for `ADMIN_EMAILS` env variable
+- [ ] **Environment variables** documented:
+  - `GOOGLE_CLIENT_ID`
+  - `GOOGLE_CLIENT_SECRET`
+  - `GOOGLE_SERVICE_ACCOUNT_KEY` (JSON stringified)
+  - `GOOGLE_SHEETS_ID`
+  - `NEXTAUTH_SECRET`
+  - `NEXTAUTH_URL`
+  - `ADMIN_EMAILS`
+  - `ALLOWED_DOMAIN`
+
+---
+
+*Last updated: May 2026 — v1.0*

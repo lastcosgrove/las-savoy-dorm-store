@@ -13,9 +13,11 @@ Implemented:
 - Immutable sale snapshots and compensating void records; derived inventory, deliveries and recounts with preserved variance.
 - Product management, image uploads, ordering, transaction search and CSV exports with formula-injection protection.
 - PWA manifest, offline shell and persistent IndexedDB storage.
-- Durable event outbox, separately tested retry worker, and draft Supabase schema with restricted RLS and atomic sale/void RPCs.
+- Durable event outbox, separately tested retry worker, and applied Supabase database foundation with restricted RLS and atomic sale/void RPCs.
 
-**Not yet connected:** live operator authentication, provisioned EU Supabase database, device authorization, the production sync transport, live catalog administration, Google Sheets, physical NFC hardware, spending-limit enforcement, backups and retention scheduling. The outbox accurately reports local-only state and never claims to be cloud-synced.
+**Database provisioned:** `las-savoy-dorm-store` in the Leysin American School organization, Frankfurt. Live database authorization and ledger tests passed with all fixtures rolled back.
+
+**Not yet connected:** live operator authentication, device authorization, the production sync transport, live catalog administration, Google Sheets, physical NFC hardware, spending-limit enforcement, backups and retention scheduling. The outbox accurately reports local-only state and never claims to be cloud-synced.
 
 ## Run
 
@@ -35,6 +37,6 @@ Keyboard: Alt+1–9 adds the corresponding product; Enter confirms; Escape clear
 
 ## Production setup
 
-See [docs/LAUNCH.md](docs/LAUNCH.md) and [docs/SPEC_REVIEW.md](docs/SPEC_REVIEW.md). Apply the SQL only after selecting the school organization and confirming project cost/region. The migration is a foundation, not a claim of finished live integration. Do not enable real charges by changing a UI label or attaching the practice outbox.
+See [docs/LAUNCH.md](docs/LAUNCH.md) and [docs/SPEC_REVIEW.md](docs/SPEC_REVIEW.md). The core SQL is applied to the selected Frankfurt project. The migration is a foundation, not a claim of finished live integration. Do not enable real charges by changing a UI label or attaching the practice outbox.
 
 Vercel can import this repository as a Next.js project using the checked-in lockfile. The current build needs no secrets because it is practice-only. A deployed practice URL is not a launch approval.

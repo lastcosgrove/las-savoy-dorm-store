@@ -1,0 +1,32 @@
+import 'fake-indexeddb/auto';
+import {test,before} from 'node:test';
+import assert from 'node:assert/strict';
+import {db,seed,startShift,checkout,voidSale,receive,saveCount,verifyPin} from '../lib/db';
+import {stockFor,chargesCsv} from '../lib/model';
+before(async()=>{await db.delete();await db.open();await seed()});
+test('atomic checkout, idempotency, immutable reversal and derived stock',async()=>{
+ const staff=(await db.operators.toArray()).find(o=>o.role==='staff')!;
+ const student=(await db.students.toArray())[0],product=(await db.products.toArray())[0];
+ assert.equal(await verifyPin(staff,'1234'),true);assert.equal(await verifyPin(staff,'0000'),false);
+ const shift=await startShift(staff),before=stockFor(product.id,await db.movements.toArray());
+ const id=crypto.randomUUID();const sale=await checkout(student,shift,{[product.id]:2},id);
+ assert.equal(sale.total_cents,2*product.price_cents);assert.equal(sale.operator_id,staff.id);assert.equal(sale.shift_id,shift.id);
+ assert.equal(stockFor(product.id,await db.movements.toArray()),before-2);
+ await checkout(student,shift,{[product.id]:2},id);assert.equal(await db.sales.count(),1);
+ const original=await db.sales.get(id);await voidSale(sale,staff,shift,'Wrong student');
+ assert.deepEqual(await db.sales.get(id),original);assert.equal(stockFor(product.id,await db.movements.toArray()),before);
+ assert.equal((await db.sales.toArray()).reduce((n,s)=>n+s.total_cents,0),0);
+ await assert.rejects(()=>voidSale(sale,staff,shift,'Retry'));assert.equal(await db.sales.count(),2);
+ const prefect=(await db.operators.toArray()).find(o=>o.role==='prefect')!;
+ await assert.rejects(()=>voidSale(sale,prefect,shift,'Not allowed'));
+ await assert.rejects(()=>receive(product.id,4,'Delivery',prefect));
+ const outbox=await db.outbox.count();await assert.rejects(()=>checkout(student,shift,{'missing-product':1}));assert.equal(await db.outbox.count(),outbox);
+ await receive(product.id,7,'Opening delivery',staff);assert.equal(stockFor(product.id,await db.movements.toArray()),before+7);
+ await saveCount({[product.id]:'5'},staff);assert.equal(stockFor(product.id,await db.movements.toArray()),5);
+ const count=(await db.counts.toArray())[0];assert.equal(count.lines[0].expected_qty,before+7);assert.equal(count.lines[0].counted_qty,5);
+ const csv=chargesCsv([{...sale,student_name:'=HYPERLINK("evil")'}]);assert.ok(csv.includes("'=HYPERLINK"));
+});
+test('empty and invalid cart never write partial charges',async()=>{
+ const student=(await db.students.toArray())[0],shift=(await db.shifts.toArray())[0],p=(await db.products.toArray())[0];
+ const before=await db.sales.count();await assert.rejects(()=>checkout(student,shift,{}));await assert.rejects(()=>checkout(student,shift,{[p.id]:1.5}));assert.equal(await db.sales.count(),before);
+});

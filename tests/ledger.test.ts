@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import {test,before} from 'node:test';
 import assert from 'node:assert/strict';
-import {db,seed,startShift,checkout,voidSale,receive,saveCount,verifyPin} from '../lib/db';
+import {db,seed,startShift,checkout,voidSale,receive,saveCount,verifyPin,saveProduct} from '../lib/db';
 import {stockFor,chargesCsv} from '../lib/model';
 before(async()=>{await db.delete();await db.open();await seed()});
 test('atomic checkout, idempotency, immutable reversal and derived stock',async()=>{
@@ -29,4 +29,22 @@ test('atomic checkout, idempotency, immutable reversal and derived stock',async(
 test('empty and invalid cart never write partial charges',async()=>{
  const student=(await db.students.toArray())[0],shift=(await db.shifts.toArray())[0],p=(await db.products.toArray())[0];
  const before=await db.sales.count();await assert.rejects(()=>checkout(student,shift,{}));await assert.rejects(()=>checkout(student,shift,{[p.id]:1.5}));assert.equal(await db.sales.count(),before);
+});
+
+test('saved catalog edits never rewrite purchase or reversal cost snapshots',async()=>{
+ const staff=(await db.operators.toArray()).find(o=>o.role==='staff')!;
+ const student=(await db.students.toArray())[0],shift=(await db.shifts.toArray())[0],p=(await db.products.toArray())[0];
+ await saveProduct({...p,cost_cents:100,price_cents:250},staff);
+ const first=await checkout(student,shift,{[p.id]:2});
+ await saveProduct({...p,cost_cents:150,price_cents:350},staff);
+ const second=await checkout(student,shift,{[p.id]:1});
+ assert.equal(first.items[0].unit_cost_cents,100);assert.equal(second.items[0].unit_cost_cents,150);
+ assert.equal((await db.sales.get(first.id))!.total_cents,500);
+ await voidSale(first,staff,shift,'Snapshot check');
+ const reversal=await db.sales.where('original_transaction_id').equals(first.id).first();
+ assert.equal(reversal!.items[0].unit_cost_cents,100);assert.equal(reversal!.total_cents,-500);
+ await receive(p.id,3,'Costed delivery',staff,90);
+ const delivery=(await db.movements.toArray()).find(m=>m.note==='Costed delivery');assert.equal(delivery!.unit_cost_cents,90);
+ await assert.rejects(()=>saveProduct({...p,cost_cents:-1},staff));
+ await assert.rejects(()=>receive(p.id,3,'Invalid cost',staff,-1));
 });

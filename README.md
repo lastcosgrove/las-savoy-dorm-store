@@ -40,3 +40,11 @@ Keyboard: Alt+1–9 adds the corresponding product; Enter confirms; Escape clear
 See [docs/LAUNCH.md](docs/LAUNCH.md) and [docs/SPEC_REVIEW.md](docs/SPEC_REVIEW.md). The core SQL is applied to the selected Frankfurt project. The migration is a foundation, not a claim of finished live integration. Do not enable real charges by changing a UI label or attaching the practice outbox.
 
 Vercel can import this repository as a Next.js project using the checked-in lockfile. The current build needs no secrets because it is practice-only. A deployed practice URL is not a launch approval.
+
+### Weekly exports and profitability
+
+Staff tools now include **Summary** and date-filtered **Transactions**. Reports default to the current Sunday–Saturday week (including rare Friday/Saturday purchases); shortcuts select last week or the current Sunday–Thursday. Custom dates are inclusive and use Europe/Zurich, including daylight-saving transitions. CSV filenames include both dates, and rows include local dates plus UTC timestamps. Exports contain all entries in the period, including reversals; the transaction search only filters the on-screen table.
+
+**Inventory → Edit** lets staff set a purchase cost and sale price, with a live gross-profit/margin preview. Blank cost means unknown; zero means genuinely free. Each future purchase stores its own cost and price snapshot. Existing receipts are never rewritten or backfilled with current costs. Missing historical costs are flagged and prevent a misleading complete-profit total. Gross margin is `(sale price − purchase cost) / sale price`; it is undefined for a zero sale price.
+
+**Receive stock** records actual unit cost per delivery (prefilled from the product, editable for that delivery). Summary shows net sales, cost of goods sold, gross profit, delivery expenses, average purchase, daily sales, and popular items. Delivery expenses and cost of goods sold are separate measures, not double-counted deductions. Reversals are reported on their own recording date. Other overheads and taxes are not tracked. All reporting remains local to this practice register; production billing and cloud sync are still launch gates.
